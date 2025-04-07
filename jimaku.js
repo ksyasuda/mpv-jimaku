@@ -3,8 +3,29 @@
 // Click the `Copy` button and paste it below
 var API_KEY = 'YOUR_API_KEY_GOES_HERE';
 
-// Filter the response to only have the specified episode
-var PROMPT_EPISODE = true;
+// Configuration options
+var CONFIG = {
+  // Filter the response to only have the specified episode
+  prompt_episode: true,
+
+  // Subtitle suffix (e.g., ".JA" for Japanese subtitles)
+  subtitle_suffix: '.JA',
+
+  // Preferred subtitle format (order matters, first is most preferred)
+  preferred_formats: ['ass', 'srt', 'vtt'],
+
+  // Automatically load the subtitle after download
+  auto_load: true,
+
+  // Default subtitle delay in seconds (can be positive or negative)
+  default_delay: 0,
+
+  // Default subtitle font size
+  default_font_size: 16,
+
+  // Automatically rename the subtitle file after download
+  auto_rename: true,
+};
 
 // Keybindings
 var MANUAL_SEARCH_KEY = 'g';
@@ -130,13 +151,75 @@ function getNames(results) {
 
 function selectSub(selectedSub) {
   showMessage('Downloading: ' + selectedSub.name);
-  downloadSub(selectedSub);
 
-  showMessage(selectedSub.name + ' downloaded');
-  mp.commandv('sub_add', selectedSub.name);
+  try {
+    downloadSub(selectedSub);
 
-  showMessage(selectedSub.name + ' added');
-  mp.set_property('pause', 'no');
+    // Get current video filename without extension
+    var videoPath = mp.get_property('path');
+    if (!videoPath) {
+      throw new Error('No video file is currently playing');
+    }
+    var videoName = videoPath.substring(0, videoPath.lastIndexOf('.'));
+
+    // Get subtitle extension
+    var subExt = selectedSub.name.substring(selectedSub.name.lastIndexOf('.'));
+
+    var newSubName = selectedSub.name;
+    if (CONFIG.auto_rename) {
+      // Create new subtitle filename
+      newSubName = videoName + CONFIG.subtitle_suffix + subExt;
+
+      // Rename the downloaded subtitle file
+      var renameResult = mp.command_native({
+        name: 'subprocess',
+        playback_only: false,
+        args: ['mv', selectedSub.name, newSubName],
+      });
+
+      if (renameResult.error) {
+        throw new Error(
+          'Failed to rename subtitle file: ' + renameResult.error
+        );
+      }
+
+      showMessage(newSubName + ' downloaded and renamed');
+    } else {
+      showMessage(newSubName + ' downloaded');
+    }
+
+    if (CONFIG.auto_load) {
+      mp.commandv('sub_add', newSubName);
+      showMessage(newSubName + ' added');
+
+      // Apply subtitle settings if configured
+      if (CONFIG.default_delay !== 0) {
+        mp.commandv('sub_delay', CONFIG.default_delay);
+      }
+      if (CONFIG.default_font_size !== 16) {
+        mp.commandv('sub_font_size', CONFIG.default_font_size);
+      }
+    }
+
+    mp.set_property('pause', 'no');
+  } catch (error) {
+    showMessage('Error: ' + error.message, true);
+    mp.set_property('pause', 'no');
+  }
+}
+
+function sortByPreferredFormat(files) {
+  return files.sort(function (a, b) {
+    var extA = a.name.substring(a.name.lastIndexOf('.') + 1).toLowerCase();
+    var extB = b.name.substring(b.name.lastIndexOf('.') + 1).toLowerCase();
+
+    var indexA = CONFIG.preferred_formats.indexOf(extA);
+    var indexB = CONFIG.preferred_formats.indexOf(extB);
+
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
 }
 
 function selectEpisode(anime, episode) {
@@ -165,6 +248,9 @@ function selectEpisode(anime, episode) {
     return;
   }
 
+  // Sort results by preferred format
+  episodeResults = sortByPreferredFormat(episodeResults);
+
   if (episodeResults.length === 1) {
     var selectedEpisode = episodeResults[0];
     selectSub(selectedEpisode);
@@ -184,7 +270,7 @@ function selectEpisode(anime, episode) {
 }
 
 function onAnimeSelected(anime) {
-  if (PROMPT_EPISODE) {
+  if (CONFIG.prompt_episode) {
     inputGet({
       prompt: 'Episode (leave blank for all): ',
       submit: function (episode) {
